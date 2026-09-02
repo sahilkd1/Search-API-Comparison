@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Real customer runs stay local — they contain prospect questions.
+# The committed worked example is force-added; see RUNBOOK.md.
+runs/*
+!runs/.gitkeep
+!runs/example-*/

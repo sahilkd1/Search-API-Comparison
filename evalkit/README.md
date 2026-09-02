@@ -1,0 +1,132 @@
+# evalkit
+
+A reusable harness for comparing the Parallel Search API against one incumbent
+on a prospect's own questions, and producing a scorecard you can walk them
+through on a call.
+
+**If you are an account executive, read [RUNBOOK.md](RUNBOOK.md) instead.**
+This file is for engineers.
+
+---
+
+## What it is
+
+An enablement template, not a benchmark. Empty harness plus runbook plus one
+worked example. Two providers per run: Parallel and one incumbent chosen in
+config. The input surface is a CSV; the output surface is a markdown document.
+No server, no UI, no database.
+
+## Quickstart
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+cp .env.example .env          # then add your keys
+.venv/bin/python runner.py
+```
+
+Runs on three sample questions out of the box and writes a timestamped
+directory under `runs/`.
+
+> `uv` rather than `pip` because Homebrew's CPython builds have shipped a
+> broken `pyexpat` linkage on recent macOS that breaks `plistlib` and, through
+> it, `pip` itself. `uv` ships a self-contained interpreter and sidesteps it.
+
+## How a run works
+
+1. **Load and validate** `questions.csv`. Missing ground truth or source URLs
+   warn loudly; fewer than 10 rows warns that n is too small to mean anything.
+2. **Generate search inputs.** One LLM, one provider-agnostic prompt, given the
+   question and the target API's input schema — never the vendor's name.
+3. **Search both providers concurrently**, bounded by `run.concurrency`, with
+   one retry on 5xx/429/timeout and exponential backoff.
+4. **Synthesize an answer** from each provider's retrieved context using an
+   identical model and prompt, so synthesis cancels out of the comparison.
+5. **Grade both answers in one blind call.** Randomized A/B order, provider
+   identities withheld, positions recorded.
+6. **Write** `raw.jsonl`, `results.csv` and `scorecard.md`.
+
+A provider failure never aborts the run. The error is recorded, counted, and
+surfaced in the scorecard.
+
+## Design decisions worth knowing
+
+**Retrieval is the variable; the model is held constant.** Both providers'
+results are synthesized by the same model with the same prompt and token
+budget. What remains in the comparison is search quality. The synthesizer is
+forbidden from using its own knowledge and must reply `INSUFFICIENT CONTEXT`
+when retrieval came up short — otherwise it answers from weights and both
+providers look identical regardless of what they returned.
+
+**Search inputs are fair by method, not by literal string.** The two APIs
+document different input shapes. Feeding both the identical raw question
+handicaps whichever vendor documents short keyword queries. Instead one model
+writes both inputs from one prompt that never learns which vendor it is
+serving; each API's schema, with field descriptions quoted from that vendor's
+own docs, lives next to its adapter. Generated inputs are persisted and printed
+in the scorecard so the symmetry is auditable rather than asserted. The
+literal-string mode is preserved as `query_generation.mode: raw` — running both
+is a stronger result than running either.
+
+**Latency excludes shared work.** Only the provider HTTP call is timed. Query
+generation and synthesis are identical for both providers and would dilute the
+difference being measured.
+
+**Cost is estimated identically for both.** Rates come from published pricing
+in `config.yaml`, each with a source URL. Exa reports its own billed cost;
+that figure is recorded and shown as a cross-check but never mixed into the
+headline column, because only one side offers it. On the sample run the
+estimate and Exa's reported cost agree exactly.
+
+**The scorecard never declares a winner.** Fixed provider ordering, no
+score-dependent emphasis, and a Divergences section that renders an incumbent
+win identically to a Parallel win.
+
+## Adding a provider
+
+Write one adapter in `providers/` subclassing `Provider`, implementing
+`input_schema`, `raw_input`, `build_payload`, `headers`, `parse` and
+`estimate_cost`. Then add one line to `REGISTRY` and one to `API_KEY_ENV` in
+`providers/__init__.py`, and a settings block plus a pricing block in
+`config.yaml`. Nothing else changes.
+
+Field descriptions in `input_schema` must be quoted from that vendor's own
+public documentation. That schema is the only provider-specific thing the
+shared query-generation prompt ever sees, so it is the one place a bias could
+be introduced.
+
+## Layout
+
+```
+config.yaml          providers, models, pricing, query-generation mode
+questions.csv        input surface
+providers/base.py    Provider ABC + ProviderResult; timing, retry, cost
+providers/*.py       one file per API
+query_gen.py         provider-agnostic search-input generation
+llm.py               shared OpenAI client; synthesis prompt
+judge.py             single-call blind grading
+report.py            metrics and scorecard rendering
+runner.py            orchestration, concurrency, persistence
+runs/                timestamped raw.jsonl + results.csv + scorecard.md
+```
+
+`llm.py` and `query_gen.py` are additions to the original spec, required by the
+fair-by-method input generation.
+
+## Notes for maintainers
+
+Provider request shapes were taken from live documentation and verified against
+real API calls, not written from memory. That process caught four errors that
+would otherwise have surfaced at runtime: Parallel's mode is `basic` not
+`base`, its `max_results` nests under `advanced_settings`, Exa's fields are
+camelCase, and `gpt-5.x` rejects `max_tokens` in favour of
+`max_completion_tokens`. Model IDs were confirmed against `/v1/models`.
+
+The judge is pinned to a dated snapshot that accepts `temperature: 0`. Some
+newer models only permit their default temperature; `llm.py` detects that
+specific rejection and retries without the parameter, so swapping the judge
+model cannot hard-fail a live customer run.
+
+API keys are never printed or logged. Error text includes response bodies —
+which carry vendor request IDs, useful for support — but never request headers.

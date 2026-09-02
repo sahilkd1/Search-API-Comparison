@@ -1,0 +1,4 @@
+question,expected_answer,source_url,notes
+"REPLACE ME — What is the list price per 1,000 requests for the Parallel Search API in basic mode?","$5 per 1,000 requests (covering the default 10 results).",https://docs.parallel.ai/getting-started/pricing,"SAMPLE ROW - delete before a real run. See RUNBOOK.md: questions about the vendors themselves are a poor diagnostic set."
+"REPLACE ME — What is the base price per 1,000 requests for Exa's /search endpoint?","$7 per 1,000 requests, covering up to 10 results.",https://docs.exa.ai/reference/pricing,"SAMPLE ROW - delete before a real run."
+"REPLACE ME — What does Exa charge per request for an Agent run at medium effort?","$0.10 per request.",https://docs.exa.ai/reference/pricing,"SAMPLE ROW - delete before a real run."

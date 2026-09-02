@@ -1,0 +1,101 @@
+# evalkit configuration.
+#
+# Every run compares exactly two providers: Parallel plus the one incumbent
+# named below. To compare against a different incumbent, change `incumbent`
+# to any key registered in providers/__init__.py.
+
+incumbent: exa
+
+run:
+  questions_file: questions.csv
+  output_dir: runs
+  concurrency: 4          # questions in flight at once, not raw HTTP requests
+  timeout_s: 45
+  retries: 1              # one retry on 5xx / timeout, with backoff
+  retry_backoff_s: 2.0
+  min_questions_warn: 10  # below this, warn that n is too small to be meaningful
+
+providers:
+  parallel:
+    endpoint: https://api.parallel.ai/v1/search
+    # turbo | fast | basic | advanced. Omitting it defaults to advanced.
+    # https://docs.parallel.ai/search/modes
+    mode: basic
+    max_results: 10
+    max_chars_per_result: 4000
+
+  exa:
+    endpoint: https://api.exa.ai/search
+    # auto | instant | fast | deep-lite | deep | deep-reasoning
+    # https://docs.exa.ai/reference/getting-started
+    type: auto
+    num_results: 10
+    highlights: true
+
+# How each API's search input is produced from the prospect's question.
+#
+#   generated - one LLM, one provider-agnostic prompt, no per-provider hand
+#               editing. Each API receives the input shape its own docs ask
+#               for. This is the default because it is symmetric by METHOD.
+#   raw       - the unmodified question is mapped onto every API's fields.
+#               Symmetric by literal string, but it feeds a full sentence
+#               into fields some vendors document as wanting short keyword
+#               queries, which handicaps those vendors.
+#
+# Both modes are kept. Running the comparison under both is a stronger result
+# than running it under either one alone.
+query_generation:
+  mode: generated         # generated | raw
+  model: gpt-5.4-mini-2026-03-17
+  max_completion_tokens: 400
+
+# Shared synthesizer. Both providers get the SAME model, prompt and token
+# budget, so it cancels out of the comparison and what remains is search
+# quality. Its latency and cost are reported separately as a shared constant
+# and are deliberately excluded from per-provider numbers.
+synthesis:
+  model: gpt-5.4-2026-03-05
+  max_completion_tokens: 400
+  temperature: 0
+
+judge:
+  # Pinned to a dated snapshot so a scorecard produced today can be
+  # reproduced next quarter. Model IDs verified against /v1/models.
+  # Chosen over gpt-5.5 because gpt-5.5 rejects temperature: 0, and a judge
+  # that cannot be pinned to greedy decoding makes a scorecard harder to
+  # reproduce. Swapping this for a model that only allows its default
+  # temperature still works — the LLM layer drops the parameter.
+  model: gpt-5.4-2026-03-05
+  max_completion_tokens: 2000
+  temperature: 0
+  # Both answers are graded in one call, in randomized order, with provider
+  # identities withheld. The position each provider drew is recorded per
+  # question in raw.jsonl so grading is auditable after the fact.
+  randomize_positions: true
+
+# Published list prices, used to compute ESTIMATED cost. Always labelled as an
+# estimate in the scorecard: it ignores negotiated discounts, free tiers and
+# volume commitments. Verify against the source URLs before quoting a prospect.
+pricing:
+  parallel:
+    # https://docs.parallel.ai/getting-started/pricing
+    # Base rate covers 10 results; extra results bill per additional result.
+    per_1k_by_mode:
+      turbo: 1.00
+      fast: 1.00
+      basic: 5.00
+      advanced: 5.00
+    additional_result_per_1k: 1.00
+
+  exa:
+    # https://docs.exa.ai/reference/pricing
+    # Base rate covers up to 10 results; extra results bill per additional result.
+    per_1k_by_type:
+      auto: 7.00
+      instant: 7.00
+      fast: 7.00
+      deep-lite: 12.00
+      deep: 12.00
+      deep-reasoning: 15.00
+    additional_result_per_1k: 1.00
+    ai_summary_per_1k_pages: 1.00
